@@ -1,18 +1,17 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="0.0.1" encoding="UTF-8"?>
 <plugin xmlns="http://apache.org/cordova/ns/plugins/1.0" id="cordova-plugin-rec" version="0.0.1">
   <name>Rec</name>
   <description>record audio plugin</description>
-  <js-module src="www/rec.js" name='Sso' >
+  <js-module src="www/rec.js" name='Rec' >
     <clobbers target="rec" />
   </js-module>
-
   <dependency id="cordova-plugin-file" version="6.0.1" />
   <!-- iOS -->
   <platform name="ios">
     <config-file target="config.xml" parent="/*">
-      <feature name="Sso">
+      <feature name="Rec">
         <param name="onload" value="true" />
-        <param name="ios-package" value="Rec" />
+        <param name="ios-package" value="CDVRec" />
       </feature>
       <preference name="deployment-target" value="10.0" />
     </config-file>
@@ -21,7 +20,7 @@
     <preference name="UseSwiftLanguageVersion" default="4" />
     
     <!-- Swift source -->
-    <source-file src="src/ios/Rec.swift" />
-    <source-file src="src/ios/Rec-Bridging-Header.h" />
+    <source-file src="src/ios/CDVRec.swift" />
+    <source-file src="src/ios/CDVRec-Bridging-Header.h" />
   </platform>
 </plugin>
