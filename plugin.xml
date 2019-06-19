@@ -21,6 +21,8 @@
     
     <!-- Swift source -->
     <source-file src="src/ios/CDVRec.swift" />
+    <source-file src="src/ios/CDVRecConverter.swift" />
+    <source-file src="src/ios/CDVRecRecorder.swift" />
     <source-file src="src/ios/CDVRec-Bridging-Header.h" />
   </platform>
 </plugin>
