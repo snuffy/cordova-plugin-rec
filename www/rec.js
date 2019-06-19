@@ -112,5 +112,4 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
   
   module.exports = Rec;
   
-  });
-  
+});
