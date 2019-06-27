@@ -29,6 +29,15 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
     setFolder: (onSuccess, onFail, param) => {
       return exec(onSuccess, onFail, 'Rec', 'setFolder', [param]);
     },
+    export: (onSuccess, onFail, param) => {
+      return exec(onSuccess, onFail, 'Rec', 'export', [param]);
+    },
+    getWaveForm: (onSuccess, onFail, param) => {
+      return exec(onSuccess, onFail, 'Rec', 'getWaveForm', [param]);
+    },
+    initSettings: (onSuccess, onFail, param) => {
+      return exec(onSuccess, onFail, 'Rec', 'initSettings', [param]);
+    }
   };
   
   // promise wrapper
@@ -63,6 +72,15 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
     stop: (params) => {
       return new Promise((resolve, reject) => {
         _Rec.stop((res) => {
+          resolve(res);
+        }, (err) => {
+          reject(err);
+        }, params);
+      });
+    },
+    export: (params) => {
+      return new Promise((resolve, reject) => {
+        _Rec.export((res) => {
           resolve(res);
         }, (err) => {
           reject(err);
@@ -108,6 +126,24 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
         }, params);
       });
     },
+    getWaveForm: (params) => {
+      return new Promise((resolve, reject) => {
+        _Rec.getWaveForm((res) => {
+          resolve(res);
+        }, (err) => {
+          reject(err);
+        }, params);
+      });
+    },
+    initSettings: (params) => {
+      return new Promise((resolve, reject) => {
+        _Rec.initSettings((res) => {
+          resolve(res);
+        }, (err) => {
+          reject(err);
+        }, params);
+      });
+    }
   }
   
   module.exports = Rec;

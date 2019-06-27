@@ -1,5 +1,6 @@
 import AVFoundation
-
+import Foundation
+import Accelerate
 
 
 
@@ -8,7 +9,8 @@ import AVFoundation
     var RECORDING_DIR:String?
     var isRecording:Bool = false
     var pushBufferCallBackId:String?
-    
+    var audioSettings:[String:Any]?
+    var bufferSize = 4096
     // Audio の型定義
     struct Audio: Codable {
         var name: String
@@ -42,14 +44,38 @@ import AVFoundation
     var audio_urls: [String]?
     var folder_path: String?
     var currentAudioName: String? // 現在録音中のファイル
-
     var currentAudios: [Audio]?// 現在録音中のファイルを順番を保証して配置
+    var currentJoinedAudioName:String? // 連結済みファイルの最新のものの名前
+    var queue: [Audio]?
     
     override func pluginInitialize() {
-        print("hi! this is cordova plugin REC. intializing now ! ....")
+        print("[cordova plugin REC. intializing]")
         self.engine = AVAudioEngine()
         RECORDING_DIR = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first! + "/recording"
-        currentAudios = [];
+        currentAudios = []
+        queue = []
+        bufferSize = 4096;
+        audioSettings = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100.0,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderBitRatePerChannelKey: 16,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+    }
+    
+    @objc func initSettings(_ command: CDVInvokedUrlCommand) {
+        let args = command.arguments
+        let settings = args![0] as! [String: Any];
+
+        for (key, value) in settings as! [String:Any] {
+            self.audioSettings![key] = value
+        }
+        
+        
+        // cordova result
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: true)
+        self.commandDelegate.send(result, callbackId:command.callbackId)
     }
     
     // start recording
@@ -65,13 +91,16 @@ import AVFoundation
         // リセットをかける
         audio_index = 0
         currentAudios = []
+        queue = []
         
         let path = self.getNewFolderPath()
         
-        self.startRecord(path: path)
+        startRecord(path: path)
+        
+        isRecording = true
         
         // 問題なければ result
-        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs:"start success")
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: true)
         self.commandDelegate.send(result, callbackId:command.callbackId)
     }
     
@@ -85,18 +114,12 @@ import AVFoundation
             return
         }
         
-        // 録音データの取得
-        let record_audio = self.pauseRecord()
+        // pause するだけ
+        pauseRecord()
+        isRecording = false
         
-        // 返す JSON データの生成
-        let encoder = JSONEncoder()
-        let s = try! encoder.encode(record_audio)
-        let jsonstr:String = String(data: s, encoding: .utf8)!
         
-        // 後処理、初期化
-        currentAudios = [];
-        
-        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs:jsonstr)
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: true)
         self.commandDelegate.send(result, callbackId:command.callbackId)
     }
     
@@ -111,16 +134,12 @@ import AVFoundation
             return
         }
         
-        // 録音データの取得
-        let record_audio = self.pauseRecord()
-        
-        // 返す JSON データの生成
-        let encoder = JSONEncoder()
-        let s = try! encoder.encode(record_audio)
-        let jsonstr:String = String(data: s, encoding: .utf8)!
-        
+        // レコーディング中断
+        pauseRecord()
+        isRecording = false
+    
         // cordova result
-        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: jsonstr)
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: true)
         self.commandDelegate.send(result, callbackId:command.callbackId)
     }
     
@@ -136,11 +155,32 @@ import AVFoundation
         
         let path = self.getCurrentFolderPath()
         self.startRecord(path: path)
+        isRecording = true
         
         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs:"pause success")
         self.commandDelegate.send(result, callbackId:command.callbackId)
     }
     
+    // 音声ファイルをエクスポートする
+    @objc func export(_ command: CDVInvokedUrlCommand) {
+        // 現在の音声ファイルをつなげる
+        let join_audio = self.joinRecord()!
+        
+        // 送るオーディオファイルの作成
+        let record_audio = RecordedAudio(audios: currentAudios!, full_audio: join_audio, folder_id: folder_id)
+        
+        // JSON データの形成
+        let encoder = JSONEncoder()
+        let data = try! encoder.encode(record_audio)
+        
+        // Dictionary 型にキャスト
+        let sendMessage = try! JSONSerialization.jsonObject(with: data, options: []) as! [String: Any]
+        
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: sendMessage)
+        self.commandDelegate.send(result, callbackId: command.callbackId)
+    }
+    
+    // 音声バッファを送る
     @objc func onPushBuffer (_ command: CDVInvokedUrlCommand) {
         pushBufferCallBackId = command.callbackId;
     }
@@ -187,6 +227,19 @@ import AVFoundation
         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: audio_path.absoluteString)
         self.commandDelegate.send(result, callbackId:command.callbackId)
     }
+    // 波形を取得する
+    @objc func getWaveForm(_ command: CDVInvokedUrlCommand) {
+        let joined_audio_path = getCurrentJoinedAudioURL()
+        let audioFile = try! AVAudioFile(forReading: joined_audio_path)
+        let nframe = Int(audioFile.length)
+        let PCMBuffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: AVAudioFrameCount(nframe))!
+        try! audioFile.read(into: PCMBuffer)
+        let bufferData = Data(buffer: UnsafeMutableBufferPointer<Float>(start:PCMBuffer.floatChannelData![0], count: nframe))
+        let pcmBufferPath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/temppcmbuffer")
+        try! bufferData.write(to: pcmBufferPath)
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: pcmBufferPath.absoluteString)
+        self.commandDelegate.send(result, callbackId: command.callbackId)
+    }
     
     private func removeFolder(id:String) {
         let folder_url = URL(fileURLWithPath: RECORDING_DIR! + "/\(id)")
@@ -199,13 +252,7 @@ import AVFoundation
     private func startRecord(path: URL) {
         do {
             // audio setting
-            let audioSettings = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 44100.0,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRatePerChannelKey: 16,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-            ] as [String : Any]
+            let audioSettings = self.audioSettings!
             
             // audio file name
             let timestamp = String(Int(NSDate().timeIntervalSince1970));
@@ -213,7 +260,7 @@ import AVFoundation
             currentAudioName = "\(id)_\(timestamp)";
             
             // フォルダがなかったらフォルダ生成
-            let folder_path = URL(string: path.absoluteString + "/divided")!;
+            let folder_path = URL(string: path.absoluteString + "/queue")!;
             if (!FileManager.default.fileExists(atPath: folder_path.absoluteString)) {
                 try FileManager.default.createDirectory(at: URL(fileURLWithPath: folder_path.path), withIntermediateDirectories: true)
             }
@@ -222,17 +269,15 @@ import AVFoundation
             let filePath = folder_path.appendingPathComponent("\(currentAudioName!).m4a")
             
             // audio file
-            let audioFile = try! AVAudioFile(forWriting: filePath, settings:  audioSettings)
+            let audioFile = try! AVAudioFile(forWriting: filePath, settings: audioSettings)
             
-            isRecording = true
             
             // write buffer
             let inputNode = self.engine?.inputNode
-            inputNode!.installTap(onBus: 0, bufferSize: 4096, format: nil) { (buffer:AVAudioPCMBuffer, when:AVAudioTime) in
+            inputNode!.installTap(onBus: 0, bufferSize: UInt32(self.bufferSize), format: nil) { (buffer:AVAudioPCMBuffer, when:AVAudioTime) in
                 do {
                     // call back が登録されていたら
                     if ((self.pushBufferCallBackId) != nil) {
-                        
                         let b = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count:Int(buffer.frameLength)))
                         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: b)
                         result?.keepCallback = true
@@ -250,11 +295,14 @@ import AVFoundation
             do {
                 try self.engine?.start()
                 audio_index += 1 // increment index
+
                 
             }
             catch let error {
                 print("[cdv plugin REC] engin start error", error)
             }
+            
+
         }
             
         catch let error {
@@ -263,27 +311,41 @@ import AVFoundation
     }
     
     // 音声をとめる
-    private func pauseRecord() -> RecordedAudio {
+    private func pauseRecord() -> Bool {
         
         // stop engine
         self.engine?.stop();
         self.engine?.inputNode.removeTap(onBus: 0)
-        isRecording = false
         
-        // 現在録音したデータを追加する
+        // 現在録音したデータを queue に追加する
         let folder_path = getCurrentFolderPath().absoluteString
-        let fullAudioPath = folder_path + "divided/\(currentAudioName!).m4a"
+        let fullAudioPath = folder_path + "queue/\(currentAudioName!).m4a"
         let asset = AVURLAsset(url: URL(string: fullAudioPath)!)
         let data = Audio(name: currentAudioName!, duration: String(asset.duration.value), path: fullAudioPath)
-        currentAudios!.append(data)
+        queue!.append(data)
         
-        
-        // 録音した全部のファイルをつなげる
-        let join_audio = self.joinFile()!
-
-        // 返す値を生成
-        return RecordedAudio(audios: currentAudios!, full_audio: join_audio, folder_id: folder_id)
+        // 追加が終わったら true
+        return true;
     }
+    
+    
+    private func joinRecord() -> Data {
+        // 録音した全部のファイルをつなげる
+        let join_audio = self.joinRecord()!
+        
+        let record_audio = RecordedAudio(audios: currentAudios!, full_audio: join_audio, folder_id: folder_id)
+        
+        // 返す JSON データの生成
+        let encoder = JSONEncoder()
+        let data = try! encoder.encode(record_audio)
+        return data
+    }
+    
+    private func getCurrentJoinedAudioURL() -> URL {
+        return URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.m4a")
+    }
+    
+    
     private func createNewFolder() -> String {
         // 新しい folder id を生成してそこに保存する (unixtime stamp)
         folder_id = String(Int(NSDate().timeIntervalSince1970))
@@ -320,7 +382,7 @@ import AVFoundation
         return randomString
     }
     // folder 内のオーディオファイルを連結して返す
-    private func joinFile() -> Audio? {
+    private func joinRecord() -> Audio? {
         
         var nextStartTime = kCMTimeZero
         var result:Audio?
@@ -328,76 +390,95 @@ import AVFoundation
         let track = composition.addMutableTrack(withMediaType: AVMediaType.audio, preferredTrackID: kCMPersistentTrackID_Invalid)
         let semaphore = DispatchSemaphore(value: 0)
         
-        // 初回時
-        if (audio_index == 1) {
-            for audio in currentAudios! {
-                let fullPath = URL(string: audio.path)!
-                if FileManager.default.fileExists(atPath:  fullPath.path) {
-                    let asset = AVURLAsset(url: fullPath)
-                    if let assetTrack = asset.tracks.first {
-                        let timeRange = CMTimeRange(start: kCMTimeZero, duration: asset.duration)
-                        do {
-                            try track!.insertTimeRange(timeRange, of: assetTrack, at: nextStartTime)
-                            nextStartTime = CMTimeAdd(nextStartTime, timeRange.duration)
-                        } catch {
-                            print("concatenateError : \(error)")
-                        }
+        
+        let joinedFilePath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.m4a", isDirectory: false)
+        let isJoinedFile = FileManager.default.fileExists(atPath: joinedFilePath.path);
+        var audio_files:[String] = [];
+        
+        var currentQueue = queue!;
+        let audio_folder_path = RECORDING_DIR! + "/\(folder_id)/divided";
+        
+        if (isJoinedFile) {
+            audio_files.append(joinedFilePath.absoluteString)
+        }
+        
+        currentQueue    .forEach { (item:Audio) in
+            audio_files.append(item.path)
+        }
+        
+        for audio in audio_files {
+            let fullPath = URL(string: audio)!
+            if FileManager.default.fileExists(atPath:  fullPath.path) {
+                let asset = AVURLAsset(url: fullPath)
+                if let assetTrack = asset.tracks.first {
+                    let timeRange = CMTimeRange(start: kCMTimeZero, duration: asset.duration)
+                    do {
+                        try track!.insertTimeRange(timeRange, of: assetTrack, at: nextStartTime)
+                        nextStartTime = CMTimeAdd(nextStartTime, timeRange.duration)
+                    } catch {
+                        print("concatenateError : \(error)")
                     }
                 }
             }
         }
-            
-        // 2回目以降はつないだ音につなげる
-        else {
-            let prev_audio_index = String(audio_index - 1)
-            
-            let names = try! FileManager.default.contentsOfDirectory(atPath: (RECORDING_DIR! + "/\(folder_id)/joined/"))
-            
-            let prev_audio_path = URL(fileURLWithPath: (RECORDING_DIR! + "/\(folder_id)/joined/\(names.first!)"))
-            
-            let current_audio_path = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/divided/\(currentAudioName!).m4a")
-            
-            for fullPath in [ prev_audio_path, current_audio_path] as [URL] {
-                if FileManager.default.fileExists(atPath:  fullPath.path) {
-                    let asset = AVURLAsset(url: fullPath)
-                    if let assetTrack = asset.tracks.first {
-                        let timeRange = CMTimeRange(start: kCMTimeZero, duration: asset.duration)
-                        do {
-                            try track!.insertTimeRange(timeRange, of: assetTrack, at: nextStartTime)
-                            nextStartTime = CMTimeAdd(nextStartTime, timeRange.duration)
-                        } catch {
-                            print("concatenateError : \(error)")
-                        }
-                    }
-                }
-            }
-            
-            // マージした時点で一つ前のファイルは削除する
-            try! FileManager.default.removeItem( atPath: prev_audio_path.path )
-        }
-
         
         if let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) {
-        
-            let folderPath = URL(fileURLWithPath: (RECORDING_DIR! + "/\(folder_id)/joined"))
+            let folderPath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined" , isDirectory: true)
             if !FileManager.default.fileExists(atPath: folderPath.path) {
-               try! FileManager.default.createDirectory(at: folderPath, withIntermediateDirectories: true)
+               try! FileManager.default.createDirectory(atPath: folderPath.path, withIntermediateDirectories: false)
             }
-   
-            let concatFileSaveURL = URL(fileURLWithPath: folderPath.appendingPathComponent("joined_audio\(audio_index).m4a").path)
+            
+            let tempPath = folderPath.absoluteString + "temp.m4a";
+            var concatFileSaveURL = URL(string: tempPath)!
             
             exportSession.outputFileType = AVFileType.m4a
             exportSession.outputURL = concatFileSaveURL
             
             exportSession.exportAsynchronously(completionHandler: {
                 switch exportSession.status {
+                
+                // ファイル連結成功時
                 case .completed:
-                    let asset = AVURLAsset(url: concatFileSaveURL);
-                    result = Audio(name:"joined_audio", duration: String(asset.duration.value), path: concatFileSaveURL.absoluteString)
+                    
+                    let joined_folder = URL(string: folderPath.absoluteString + "joined.m4a")!
+                    
+                    // もとの joined.m4a を削除
+                    if FileManager.default.fileExists(atPath: joined_folder.path) {
+                        try! FileManager.default.removeItem( atPath: joined_folder.path )
+                    }
+                    
+                    
+                    // ファイル名変更 temp.m4a => joined.m4a
+                    try! FileManager.default.moveItem(atPath: concatFileSaveURL.path, toPath: joined_folder.path)
+                    
+                    // Queue フォルダーに移動。移動後 queue -> divided フォルダーに移動
+                    currentQueue = currentQueue.map { (item) in
+                        let from = URL(string: item.path)!
+                        let to = URL(fileURLWithPath: "\(audio_folder_path)/\(item.name).m4a")
+                        
+                        if !FileManager.default.fileExists(atPath: audio_folder_path) {
+                            try! FileManager.default.createDirectory(atPath: audio_folder_path, withIntermediateDirectories: true)
+                        }
+                        
+                        try! FileManager.default.moveItem(atPath: from.path, toPath: to.path)
+                        return Audio(name: item.name, duration: item.duration, path: to.absoluteString)
+                    }
+                    
+                    self.currentAudios?.append(contentsOf: currentQueue)
+                    
+                    self.queue = [] // Queue をリセット
+                    
+                    
+                    let asset = AVURLAsset(url: joined_folder);
+                    
+                    result = Audio(name:"joined_audio", duration: String(asset.duration.value), path: joined_folder.absoluteString)
+                    
                     semaphore.signal()
                 case .failed, .cancelled:
                     print("[join error: failed or cancelled]", exportSession.error.debugDescription)
                     semaphore.signal()
+                case .waiting:
+                    print(exportSession.progress);
                 default:
                     print("[join error: other error]", exportSession.error.debugDescription)
                     semaphore.signal()
