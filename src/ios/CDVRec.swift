@@ -11,6 +11,7 @@ import Accelerate
     var pushBufferCallBackId:String?
     var audioSettings:[String:Any]?
     var bufferSize = 4096
+    var audioSession: AVAudioSession?
     // Audio の型定義
     struct Audio: Codable {
         var name: String
@@ -280,6 +281,10 @@ import Accelerate
             // audio file
             let audioFile = try! AVAudioFile(forWriting: filePath, settings: audioSettings)
             
+            // セッションを作成、有効化
+            self.audioSession = AVAudioSession.sharedInstance()
+            try self.audioSession?.setCategory(AVAudioSessionCategoryPlayAndRecord)
+            try self.audioSession?.setActive(true)
             
             // write buffer
             let inputNode = self.engine?.inputNode
@@ -326,6 +331,9 @@ import Accelerate
         self.engine?.stop();
         self.engine?.inputNode.removeTap(onBus: 0)
         
+        // セッションを非アクティブ化
+        try! self.audioSession?.setActive(false)
+        self.audioSession = nil;
         // 現在録音したデータを queue に追加する
         let folder_path = getCurrentFolderPath().absoluteString
         let fullAudioPath = folder_path + "queue/\(currentAudioName!).m4a"
