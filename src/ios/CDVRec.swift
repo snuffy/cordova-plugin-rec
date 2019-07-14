@@ -62,6 +62,12 @@ import Accelerate
             AVEncoderBitRatePerChannelKey: 16,
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
+        
+        // 録音したものを配置するルートを作成
+        if !FileManager.default.fileExists(atPath: URL(fileURLWithPath: RECORDING_DIR!).path) {
+            try! FileManager.default.createDirectory(at: URL(fileURLWithPath: RECORDING_DIR!), withIntermediateDirectories: true)
+        }
+    
     }
     
     @objc func initSettings(_ command: CDVInvokedUrlCommand) {
@@ -187,6 +193,9 @@ import Accelerate
     
     @objc func getRecordingFolders(_ command: CDVInvokedUrlCommand) {
         do {
+            if !FileManager.default.fileExists(atPath: URL(fileURLWithPath: RECORDING_DIR!).path) {
+                try FileManager.default.createDirectory(at: URL(fileURLWithPath: RECORDING_DIR!), withIntermediateDirectories: true)
+            }
             let fileNames = try FileManager.default.contentsOfDirectory(atPath: RECORDING_DIR!)
             let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs:fileNames)
             self.commandDelegate.send(result, callbackId:command.callbackId)
@@ -328,18 +337,6 @@ import Accelerate
         return true;
     }
     
-    
-    private func joinRecord() -> Data {
-        // 録音した全部のファイルをつなげる
-        let join_audio = self.joinRecord()!
-        
-        let record_audio = RecordedAudio(audios: currentAudios!, full_audio: join_audio, folder_id: folder_id)
-        
-        // 返す JSON データの生成
-        let encoder = JSONEncoder()
-        let data = try! encoder.encode(record_audio)
-        return data
-    }
     
     private func getCurrentJoinedAudioURL() -> URL {
         return URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.m4a")
