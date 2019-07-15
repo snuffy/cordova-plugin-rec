@@ -29,16 +29,23 @@ import Accelerate
     /* folder structure
      
      // divided file
-     Documents/recording/1560480886/divided/hogehoge.m4a
-     Documents/recording/1560480886/divided/fugafuga.m4a
-     Documents/recording/1560480886/divided/foofoo.m4a
+     Documents/recording/1560480886/divided/hogehoge.wav
+     Documents/recording/1560480886/divided/fugafuga.wav
+     Documents/recording/1560480886/divided/foofoo.wav
      
      // joined file
-     Documents/recording/1560480886/joined/joined_audio0.m4a
-     Documents/recording/1560480886/joined/joined_audio1.m4a
-     Documents/recording/1560480886/joined/joined_audio2.m4a
+     Documents/recording/1560480886/joined/joined_audio0.wav
+     Documents/recording/1560480886/joined/joined_audio1.wav
+     Documents/recording/1560480886/joined/joined_audio2.wav
      
     */
+    
+    /*
+     1. レコーディングは wav で行う
+     2. export が呼ばれる場合はそのまま返す wav で返す
+     3. exportWithCompression の場合は m4a で返す
+     4. split では
+     */
 
     var folder_id: String = "default_id"
     var audio_index: Int32 = 0
@@ -57,14 +64,14 @@ import Accelerate
         queue = []
         bufferSize = 4096;
         audioSettings = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: 44100.0,
             AVNumberOfChannelsKey: 1,
             AVEncoderBitRatePerChannelKey: 16,
             AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
         ]
         
-        // 録音したものを配置するルートを作成
+        // 録音したものを配置するルートフォルダを作成
         if !FileManager.default.fileExists(atPath: URL(fileURLWithPath: RECORDING_DIR!).path) {
             try! FileManager.default.createDirectory(at: URL(fileURLWithPath: RECORDING_DIR!), withIntermediateDirectories: true)
         }
@@ -75,11 +82,10 @@ import Accelerate
         let args = command.arguments
         let settings = args![0] as! [String: Any];
 
-        for (key, value) in settings as! [String:Any] {
+        for (key, value) in settings {
             self.audioSettings![key] = value
         }
-        
-        
+
         // cordova result
         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: true)
         self.commandDelegate.send(result, callbackId:command.callbackId)
@@ -101,7 +107,7 @@ import Accelerate
         queue = []
         
         let path = self.getNewFolderPath()
-        
+
         startRecord(path: path)
         
         isRecording = true
@@ -276,7 +282,7 @@ import Accelerate
             }
             
             // base data
-            let filePath = folder_path.appendingPathComponent("\(currentAudioName!).m4a")
+            let filePath = folder_path.appendingPathComponent("\(currentAudioName!).wav")
             
             // audio file
             let audioFile = try! AVAudioFile(forWriting: filePath, settings: audioSettings)
@@ -336,7 +342,7 @@ import Accelerate
         self.audioSession = nil;
         // 現在録音したデータを queue に追加する
         let folder_path = getCurrentFolderPath().absoluteString
-        let fullAudioPath = folder_path + "queue/\(currentAudioName!).m4a"
+        let fullAudioPath = folder_path + "queue/\(currentAudioName!).wav"
         let asset = AVURLAsset(url: URL(string: fullAudioPath)!)
         let data = Audio(name: currentAudioName!, duration: String(asset.duration.value), path: fullAudioPath)
         queue!.append(data)
@@ -347,7 +353,7 @@ import Accelerate
     
     
     private func getCurrentJoinedAudioURL() -> URL {
-        return URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.m4a")
+        return URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.wav")
     }
     
     
@@ -396,7 +402,7 @@ import Accelerate
         let semaphore = DispatchSemaphore(value: 0)
         
         
-        let joinedFilePath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.m4a", isDirectory: false)
+        let joinedFilePath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined/joined.wav", isDirectory: false)
         let isJoinedFile = FileManager.default.fileExists(atPath: joinedFilePath.path);
         var audio_files:[String] = [];
         
@@ -427,16 +433,16 @@ import Accelerate
             }
         }
         
-        if let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) {
+        if let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) {
             let folderPath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined" , isDirectory: true)
             if !FileManager.default.fileExists(atPath: folderPath.path) {
                try! FileManager.default.createDirectory(atPath: folderPath.path, withIntermediateDirectories: false)
             }
             
-            let tempPath = folderPath.absoluteString + "temp.m4a";
-            var concatFileSaveURL = URL(string: tempPath)!
+            let tempPath = folderPath.absoluteString + "temp.wav";
+            let concatFileSaveURL = URL(string: tempPath)!
             
-            exportSession.outputFileType = AVFileType.m4a
+            exportSession.outputFileType = AVFileType.wav
             exportSession.outputURL = concatFileSaveURL
             
             exportSession.exportAsynchronously(completionHandler: {
@@ -445,21 +451,21 @@ import Accelerate
                 // ファイル連結成功時
                 case .completed:
                     
-                    let joined_folder = URL(string: folderPath.absoluteString + "joined.m4a")!
+                    let joined_folder = URL(string: folderPath.absoluteString + "joined.wav")!
                     
-                    // もとの joined.m4a を削除
+                    // もとの joined.wav を削除
                     if FileManager.default.fileExists(atPath: joined_folder.path) {
                         try! FileManager.default.removeItem( atPath: joined_folder.path )
                     }
                     
                     
-                    // ファイル名変更 temp.m4a => joined.m4a
+                    // ファイル名変更 temp.wav => joined.wav
                     try! FileManager.default.moveItem(atPath: concatFileSaveURL.path, toPath: joined_folder.path)
                     
                     // Queue フォルダーに移動。移動後 queue -> divided フォルダーに移動
                     currentQueue = currentQueue.map { (item) in
                         let from = URL(string: item.path)!
-                        let to = URL(fileURLWithPath: "\(audio_folder_path)/\(item.name).m4a")
+                        let to = URL(fileURLWithPath: "\(audio_folder_path)/\(item.name).wav")
                         
                         if !FileManager.default.fileExists(atPath: audio_folder_path) {
                             try! FileManager.default.createDirectory(atPath: audio_folder_path, withIntermediateDirectories: true)
