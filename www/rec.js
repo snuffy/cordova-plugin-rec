@@ -32,11 +32,20 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
     export: (onSuccess, onFail, param) => {
       return exec(onSuccess, onFail, 'Rec', 'export', [param]);
     },
+    exportWithCompression: (onSuccess, onFail, param) => {
+      return exec(onSuccess, onFail, 'Rec', 'exportWithCompression', [param]);
+    },
     getWaveForm: (onSuccess, onFail, param) => {
       return exec(onSuccess, onFail, 'Rec', 'getWaveForm', [param]);
     },
     initSettings: (onSuccess, onFail, param) => {
       return exec(onSuccess, onFail, 'Rec', 'initSettings', [param]);
+    },
+    split: (onSuccess, onFail, param) => {
+      return exec(onSuccess, onFail, 'Rec', 'split', [param]);
+    },
+    getAudio: (onSuccess, onFail, param) => {
+      return exec(onSuccess, onFail, 'Rec', 'getAudio', [param]);
     }
   };
   
@@ -87,8 +96,20 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
         }, params);
       });
     },
+    exportWithCompression: (params) => {
+      return new Promise((resolve, reject) => {
+        _Rec.exportWithCompression((res) => {
+          resolve(res);
+        }, (err) => {
+          reject(err);
+        }, params);
+      });
+    },
     onPushBuffer: (callback, onFail, param) => {
       return exec(callback, onFail, 'Rec', 'onPushBuffer', [param]);
+    },
+    onProgressCompression: (callback, onFail, param) => {
+      return exec(callback, onFail, 'Rec', 'onProgressCompression', [param]);
     },
     getRecordingFolders: (params) => {
       return new Promise((resolve, reject) => {
@@ -138,6 +159,24 @@ cordova.define("cordova-plugin-rec.Rec", function(require, exports, module) {
     initSettings: (params) => {
       return new Promise((resolve, reject) => {
         _Rec.initSettings((res) => {
+          resolve(res);
+        }, (err) => {
+          reject(err);
+        }, params);
+      });
+    },
+    split: (params) => {
+      return new Promise((resolve, reject) => {
+        _Rec.split((res) => {
+          resolve(res);
+        }, (err) => {
+          reject(err);
+        }, params);
+      });
+    },
+    getAudio: (params) => {
+      return new Promise((resolve, reject) => {
+        _Rec.getAudio((res) => {
           resolve(res);
         }, (err) => {
           reject(err);

@@ -3,12 +3,12 @@ import Foundation
 import Accelerate
 
 
-
 @objc(CDVRec) class CDVRec : CDVPlugin, AVAudioPlayerDelegate {
     var engine:AVAudioEngine? = nil;
     var RECORDING_DIR:String?
     var isRecording:Bool = false
     var pushBufferCallBackId:String?
+    var commpressProgressCallBackId:String?
     var audioSettings:[String:Any]?
     var bufferSize = 4096
     var audioSession: AVAudioSession?
@@ -198,6 +198,11 @@ import Accelerate
         pushBufferCallBackId = command.callbackId;
     }
     
+    // progress bar のコールバック
+    @objc func onProgressCompression (_ command: CDVInvokedUrlCommand) {
+        commpressProgressCallBackId = command.callbackId;
+    }
+    
     @objc func getRecordingFolders(_ command: CDVInvokedUrlCommand) {
         do {
             if !FileManager.default.fileExists(atPath: URL(fileURLWithPath: RECORDING_DIR!).path) {
@@ -243,9 +248,31 @@ import Accelerate
         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: audio_path.absoluteString)
         self.commandDelegate.send(result, callbackId:command.callbackId)
     }
+    
+    @objc func getAudio(_ command: CDVInvokedUrlCommand) {
+        folder_id = command.argument(at: 0) as! String
+        let j = try! FileManager.default.contentsOfDirectory(atPath: (RECORDING_DIR! + "/\(folder_id)/joined/"))
+        let audio_path = URL(fileURLWithPath: (RECORDING_DIR! + "/\(folder_id)/joined/\(j.first!)"))
+        let asset = AVURLAsset(url:audio_path)
+        
+        let joined_audio = Audio(name: "joined_audio", duration: String(asset.duration.value), path: audio_path.absoluteString)
+        
+        let audio = RecordedAudio(audios: [], full_audio: joined_audio, folder_id: folder_id)
+        
+        // JSON データの形成
+        let encoder = JSONEncoder()
+        let data = try! encoder.encode(audio)
+        
+        // Dictionary 型にキャスト
+        let sendMessage = try! JSONSerialization.jsonObject(with: data, options: []) as! [String: Any]
+        
+        let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: sendMessage)
+        self.commandDelegate.send(result, callbackId: command.callbackId)
+    }
+    
     // 波形を取得する
     @objc func getWaveForm(_ command: CDVInvokedUrlCommand) {
-        let joined_audio_path = getCurrentJoinedAudioURL()
+        let joined_audio_path = URL(string: command.argument(at: 0) as! String)!
         let audioFile = try! AVAudioFile(forReading: joined_audio_path)
         let nframe = Int(audioFile.length)
         let PCMBuffer = AVAudioPCMBuffer(pcmFormat: audioFile.processingFormat, frameCapacity: AVAudioFrameCount(nframe))!
@@ -255,6 +282,182 @@ import Accelerate
         try! bufferData.write(to: pcmBufferPath)
         let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: pcmBufferPath.absoluteString)
         self.commandDelegate.send(result, callbackId: command.callbackId)
+    }
+    
+    // 分割する
+    @objc func split(_ command: CDVInvokedUrlCommand) {
+        let s:NSNumber = command.argument(at: 0)! as! NSNumber;
+        let seconds = s.floatValue;
+        
+        // Audio Asset 作成
+        let currentPath = self.getCurrentFolderPath()
+        let audioURL = URL(fileURLWithPath: currentPath.path + "/joined/joined.wav")
+        let audioAsset = AVURLAsset(url: audioURL)
+        var exportAudio: Audio?
+        let semaphore = DispatchSemaphore(value: 0);
+        
+        // composition 作成
+        let composition = AVMutableComposition()
+        if let audioAssetTrack = audioAsset.tracks(withMediaType: AVMediaType.audio).first,
+            let audioCompositionTrack = composition.addMutableTrack(withMediaType: AVMediaType.audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            let timescale = Int32(NSEC_PER_SEC)
+            let start = CMTimeMakeWithSeconds(0, timescale)
+            let end = CMTimeMakeWithSeconds(Float64(seconds), timescale)
+            let range = CMTimeRangeMake(start, end)
+            // カット
+            do {
+                try audioCompositionTrack.insertTimeRange(range, of: audioAssetTrack, at: kCMTimeZero)
+                
+            }
+            catch let error {
+                print(error)
+            }
+            
+            //  export
+            if let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) {
+                let folderPath = URL(fileURLWithPath: RECORDING_DIR! + "/\(folder_id)/joined" , isDirectory: true)
+                if !FileManager.default.fileExists(atPath: folderPath.path) {
+                    try! FileManager.default.createDirectory(atPath: folderPath.path, withIntermediateDirectories: false)
+                }
+                
+                // 一時保存ファイルとして export 後, もとのファイルを削除してリネーム
+                let tempPath = folderPath.absoluteString + "temp.wav";
+                let cutFilePath = URL(string: tempPath)!
+                exportSession.outputFileType = AVFileType.wav
+                exportSession.outputURL = cutFilePath
+                
+                exportSession.exportAsynchronously {
+                    switch exportSession.status {
+                    case .completed:
+                        
+                        // join
+                        let joined_folder = URL(string: folderPath.absoluteString + "joined.wav")!
+                        
+                        // もとの joined.wav を削除
+                        if FileManager.default.fileExists(atPath: joined_folder.path) {
+                            try! FileManager.default.removeItem( atPath: joined_folder.path )
+                        }
+                        
+                        // ファイル名変更 temp.wav => joined.wav
+                        try! FileManager.default.moveItem(atPath: cutFilePath.path, toPath: joined_folder.path)
+                        
+                        
+                        let asset = AVURLAsset(url: joined_folder);
+                        
+                        exportAudio = Audio(name:"joined_audio", duration: String(asset.duration.value), path: joined_folder.absoluteString)
+                        
+                        semaphore.signal()
+                    case .failed, .cancelled:
+                        print("[join error: failed or cancelled]", exportSession.error.debugDescription)
+                        semaphore.signal()
+                    case .waiting:
+                        print(exportSession.progress);
+                    default:
+                        print("[join error: other error]", exportSession.error.debugDescription)
+                        semaphore.signal()
+                    }
+                }
+                
+                
+            }
+            
+            semaphore.wait()
+            
+            // 送るオーディオファイルの作成
+            let record_audio = RecordedAudio(audios: currentAudios!, full_audio: exportAudio!, folder_id: folder_id)
+            
+            // JSON データの形成
+            let encoder = JSONEncoder()
+            let data = try! encoder.encode(record_audio)
+            
+            // Dictionary 型にキャスト
+            let sendMessage = try! JSONSerialization.jsonObject(with: data, options: []) as! [String: Any]
+            
+            let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: sendMessage)
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+        }
+    }
+    
+    @objc func exportWithCompression(_ command: CDVInvokedUrlCommand) {
+        commandDelegate.run(inBackground: {
+            
+        let semaphore = DispatchSemaphore(value: 0)
+        var audio:Audio?
+        
+        if let id = command.argument(at: 0) {
+            self.folder_id = id as! String
+        }
+        
+        let inputPath = URL(fileURLWithPath: "\(self.RECORDING_DIR!)/\(self.folder_id)/joined/joined.wav")
+        let outputPath = URL(fileURLWithPath: "\(self.RECORDING_DIR!)/\(self.folder_id)/joined/joined.m4a")
+        
+        // file があった場合は削除して作る
+        if FileManager.default.fileExists(atPath: outputPath.path) {
+            try! FileManager.default.removeItem(at: outputPath)
+        }
+        
+        let asset = AVURLAsset(url: inputPath)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else { return }
+        session.outputURL = outputPath
+        session.outputFileType = .m4a
+        session.exportAsynchronously {
+            switch (session.status) {
+            case .completed:
+                print("[completed -------------------------->]")
+                audio = Audio(name: "joined_audio", duration: String(asset.duration.value), path: outputPath.absoluteString )
+                semaphore.signal()
+                break
+            case .failed:
+                print("[failed -------------------------->]")
+                semaphore.signal()
+                break
+            case .waiting:
+                print("[waiting -------------------------->]")
+                semaphore.signal()
+                break
+            default:
+                break
+            }
+        }
+            
+        
+        // プログレスバーのコールバック
+        var p = 0;
+        var r:CDVPluginResult?
+        while(session.status != .completed && session.status != .failed) {
+            if p != Int(round(session.progress * 100)) {
+                p = Int(round(session.progress * 100))
+                r = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: String(p))
+                if self.commpressProgressCallBackId != nil {
+                    r?.keepCallback = true
+                    self.commandDelegate.send(r, callbackId: self.commpressProgressCallBackId)
+                }
+            }
+        }
+        r?.keepCallback = false;
+
+
+        semaphore.wait()
+        
+        if audio != nil {
+            // 送るオーディオファイルの作成
+            let record_audio = RecordedAudio(audios: [], full_audio: audio!, folder_id: self.folder_id)
+            
+            // JSON データの形成
+            let encoder = JSONEncoder()
+            let data = try! encoder.encode(record_audio)
+            
+            // Dictionary 型にキャスト
+            let sendMessage = try! JSONSerialization.jsonObject(with: data, options: []) as! [String: Any]
+            
+            let result = CDVPluginResult(status: CDVCommandStatus_OK, messageAs: sendMessage)
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+        }
+        else {
+            let result = CDVPluginResult(status: CDVCommandStatus_ERROR, messageAs: "compression failed")
+            self.commandDelegate.send(result, callbackId: command.callbackId)
+        }
+        })
     }
     
     private func removeFolder(id:String) {
@@ -500,5 +703,6 @@ import Accelerate
         semaphore.wait()
         return result
     }
+
     
 }
