@@ -5,7 +5,6 @@
   <js-module src="www/rec.js" name='Rec' >
     <clobbers target="rec" />
   </js-module>
-  <dependency id="cordova-plugin-file" version="6.0.1" />
   <!-- iOS -->
   <platform name="ios">
     <config-file target="config.xml" parent="/*">
@@ -24,5 +23,24 @@
     <source-file src="src/ios/CDVRecConverter.swift" />
     <source-file src="src/ios/CDVRecRecorder.swift" />
     <source-file src="src/ios/CDVRec-Bridging-Header.h" />
+  </platform>
+  <!-- Android -->
+  <platform name="android">
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="Rec">
+        <param name="android-package" value="jp.snuffy.rec.CDVRec"/>
+        <param name="onload" value="true" />
+      </feature>
+      <preference name="android-minSdkVersion" value="19" />
+    </config-file>
+    <config-file target="AndroidManifest.xml" parent="/manifest">
+      <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    </config-file>
+    
+    <source-file src="src/android/CDVRec.java" target-dir="src/jp/snuffy/rec" />
+    <source-file src="src/android/WavFile.java" target-dir="src/jp/snuffy/rec" />
+    <source-file src="src/android/WavFileException.java" target-dir="src/jp/snuffy/rec" />
+
+    <framework src="build.gradle" custom="true" type="gradleReference"/>
   </platform>
 </plugin>
